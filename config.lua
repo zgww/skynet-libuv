@@ -1,0 +1,14 @@
+skynet_root = '/home/zgww/ws/skynet/'
+root = skynet_root
+thread = 8
+logger = nil
+harbor = 0
+start = "main"	-- main script
+bootstrap = "snlua bootstrap"	-- The service for bootstrap
+luaservice = skynet_root .. 'lualib/?.lua;' .. skynet_root .. "service/?.lua;" .. './?.lua;'
+lualoader = skynet_root .. "lualib/loader.lua"
+snax = './?.lua;' .. root .. 'lualib/?.lua;'
+cpath = root .. "cservice/?.so"
+lua_path = root .. 'lualib/?.lua;' .. root .. 'lualib/?/init.lua;'
+lua_cpath = root .. 'luaclib/?.so;./?.so'
+-- daemon = "./skynet.pid"
