@@ -2,7 +2,7 @@
 libuv(fs, process) on skynet.
 
 我理解的skynet库，并未提供非阻塞的文件和system调用，
-所以利用libuv为来补完。
+所以利用libuv来补完。
 
 ## 原理
 
