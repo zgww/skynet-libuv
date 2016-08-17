@@ -1,6 +1,6 @@
 
 
-skynet = /home/zgww/ws/skynet
+skynet = /home/zgww/pe/skynet
 
 I = -I$(skynet)/skynet-src \
 	-I$(skynet)/3rd/lua \

@@ -117,37 +117,37 @@ static void __free_entry(struct entry *entry){
 }
 
 static void __add_entry(int32_t handle, int session, int cmd, char **argv){
-	printf("new entry\n");
+	//printf("new entry\n");
 
 	struct entry *entry = calloc(1, sizeof(struct entry));
-	printf("set cmd\n");
+	//printf("set cmd\n");
 	entry->cmd = cmd;
-	printf("set argv\n");
+	//printf("set argv\n");
 	entry->argv = __dup_argv(argv);
-	printf("set handle\n");
+	//printf("set handle\n");
 	entry->handle = handle;
-	printf("set session\n");
+	//printf("set session\n");
 	entry->session = session;
 
-	printf("set req.data = entry\n");
+	//printf("set req.data = entry\n");
 	// -> self
 	entry->req.data = entry;
-	printf("set process_req.data = entry\n");
+	//printf("set process_req.data = entry\n");
 	entry->process_req.data = entry;
-	printf("set pipe.data = entry\n");
+	//printf("set pipe.data = entry\n");
 	entry->pipe.data = entry;
 
-	printf("try lock\n");
+	//printf("try lock\n");
 	while (uv_mutex_trylock(&entry_mutex))
 		;
 
-	printf("get lock succ\n");
+	//printf("get lock succ\n");
 	entry->next = entry_head;
 	entry_head = entry;
 
-	printf("unlock\n");
+	//printf("unlock\n");
 	uv_mutex_unlock(&entry_mutex);
-	printf("async send\n");
+	//printf("async send\n");
 	uv_async_send(&entry_async);
 }
 static void __init_entry_buf(struct entry *entry, int size){
@@ -192,7 +192,7 @@ static int __parse_flags(const char *flags){
 		if (a) 
 			flag = O_RDWR | O_CREAT | O_APPEND;
 	}
-	printf("flag %d, r : %d, w : %d, a : %d, add : %d %d %d %d\n", flag, r, w, a, add, O_RDWR, O_RDWR | O_CREAT | O_TRUNC, O_RDWR | O_CREAT | O_TRUNC);
+	//printf("flag %d, r : %d, w : %d, a : %d, add : %d %d %d %d\n", flag, r, w, a, add, O_RDWR, O_RDWR | O_CREAT | O_TRUNC, O_RDWR | O_CREAT | O_TRUNC);
 	return flag;
 }
 
@@ -214,7 +214,7 @@ static void __notify_ccall(int result, struct entry *entry, uv_buf_t *buf){
 
 	struct skynet_context *ctx = skynet_handle_grab(entry->handle);
 
-	printf("_thread send to ctx %p handle : %d, session %d\n", ctx, entry->handle, entry->session);
+	printf("_thread send to ctx %p handle : %d, session %d result %d\n", ctx, entry->handle, entry->session, result);
 	skynet_context_send(ctx, msg, sizeof(struct res_msg), 0, PTYPE_RESPONSE, entry->session);
 	printf("send done\n");
 }
@@ -254,7 +254,9 @@ static void __open(struct entry *entry){
 	const char *flags = entry->argv[1];
 	int flag = __parse_flags(flags);
 
-	uv_fs_open(uv_loop, &entry->req, path, flag, 0, __on_fs);
+	uv_fs_open(uv_loop, &entry->req, path, flag,
+			S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH,
+		   	__on_fs);
 }
 static void __read(struct entry *entry){
 	const char *fd_str = entry->argv[0];
@@ -284,21 +286,28 @@ static void __close(struct entry *entry){
 	uv_fs_close(uv_loop, &entry->req, fd, __on_fs);
 }
 static void __on_spawn_exit(uv_process_t *req, int64_t exit_status, int term_signal){
+	printf("__on_spawn_exit\n");
 	struct entry *entry = req->data;
 	entry->exit_status = exit_status;
 	entry->term_signal = term_signal;
 
+	printf("__on_spawn_exit result : 0, exit status : %d, term signal : %d\n", exit_status, term_signal);
 	__notify_ccall(0, entry, NULL);
 
 	//printf("process exited with status %d %d\n", exit_status, term_signal);
+	printf("uv_close spawn req\n");
 	uv_close((uv_handle_t *)req, NULL);
+	printf("uv_close spawn req done\n");
 }
 static void __on_uv_read_stream(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf){
+	printf("__on_uv_read_stream. nread : %d\n", nread);
 	uv_pipe_t *pipe = (uv_pipe_t *)stream;
 	// err or done
 	if (nread <= 0) {
+		printf("__on_uv_read_stream. free then close pipe\n");
 		free(buf->base);
 		uv_close((uv_handle_t *)pipe, NULL);
+		printf("__on_uv_read_stream. free then close pipe done\n");
 		return;
 	}
 
@@ -306,12 +315,13 @@ static void __on_uv_read_stream(uv_stream_t *stream, ssize_t nread, const uv_buf
 	//buf len = suggest_len + 1
 	//nread < entry.buf.len
 	buf->base[nread] = '\0';
+	printf("what pipe read : \n%s\n", buf);
 
 	// 1 mean : reading output
 	__notify_ccall(1, entry, (uv_buf_t *)buf);
 }
 static void __alloc_buf(uv_handle_t *handle, size_t len, uv_buf_t *buf){
-	printf("alloc buffer called. requesting %d byte \n", len);
+	printf("alloc buffer called. requesting %ld byte \n", len);
 	buf->base = malloc(len + 1);
 	buf->len = len;
 }
