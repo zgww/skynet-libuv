@@ -313,10 +313,12 @@ static void __write(struct entry *entry){
 	const char *fd_str = entry->argv[0];
 	int fd = atoi(fd_str);
 	const char *str = entry->argv[1];
-	int len = strlen(str);
+
+	const char *len_str = entry->argv[2];
+	size_t len = (size_t)atoi(len_str);
 
 	__init_entry_buf(entry, len);
-	strcpy(entry->buf.base, str);
+	strncpy(entry->buf.base, str, len);
 	entry->buf.len = len;
 
 	uv_fs_write(uv_loop, &entry->req, fd, &entry->buf, 1, -1, __on_fs);
@@ -505,13 +507,13 @@ static void __init(){
 		sleep(0);
 }
 
-void snuv_open(int32_t handle, int session, char *path, char *flags){
+static void snuv_open(int32_t handle, int session, char *path, char *flags){
 	__init();
 
 	char *argv[] = { path, flags, NULL, };
 	__add_entry(handle, session, SNUV_COPEN, argv);
 }
-void snuv_read_str(int32_t handle, int session, int fd){
+static void snuv_read_str(int32_t handle, int session, int fd){
 	__init();
 
 	char fs_str[128];
@@ -521,20 +523,23 @@ void snuv_read_str(int32_t handle, int session, int fd){
 
 	__add_entry(handle, session, SNUV_CREAD, argv);
 }
-void snuv_write_str(int32_t handle, int session, int fd, char *str){
+static void snuv_write_str(int32_t handle, int session, int fd, char *str, size_t len){
 	__init();
 
 	char fd_str[128];
 	sprintf(fd_str, "%d", fd);
+	char len_str[128];
+	sprintf(len_str, "%ld", (long)len);
 
 	char *argv[3];
 	argv[0] = fd_str;
 	argv[1] = (char *)str;
-	argv[2] = NULL;
+	argv[2] = len_str;
+	argv[3] = NULL;
 
 	__add_entry(handle, session, SNUV_CWRITE, argv);
 }
-void snuv_close(int32_t handle, int session, int fd){
+static void snuv_close(int32_t handle, int session, int fd){
 	__init();
 
 	char fd_str[128];
@@ -547,7 +552,7 @@ void snuv_close(int32_t handle, int session, int fd){
 // argv = {executable_file_path, ..., NULL}
 // argv is not used after snuv_spawn.
 // snuv_spawn use argv copy
-void snuv_spawn(int32_t handle, int session, char **argv){
+static void snuv_spawn(int32_t handle, int session, char **argv){
 	__init();
 
 	__add_entry(handle, session, SNUV_CSPAWN, argv);
@@ -574,9 +579,10 @@ static int lwrite_str(lua_State *ls){
 	int32_t handle = (int32_t)lua_tointeger(ls, -4);
 	int session = lua_tointeger(ls, -3);
 	int fd = lua_tointeger(ls, -2);
-	const char *str = lua_tostring(ls, -1);
+	size_t len;
+	const char *str = lua_tolstring(ls, -1, &len);
 
-	snuv_write_str(handle, session, fd, (char *)str);
+	snuv_write_str(handle, session, fd, (char *)str, len);
 	return 0;
 }
 static int lclose(lua_State *ls){
@@ -771,6 +777,7 @@ int luaopen_snuv(lua_State *l) {
 		{ "open", lopen },
 		{ "read_str", lread_str },
 		{ "write_str", lwrite_str },
+		{ "write", lwrite_str },
 		{ "close", lclose },
 		{ "spawn", lspawn },
 
