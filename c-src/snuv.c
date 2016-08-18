@@ -235,23 +235,23 @@ static void __notify_ccall(int result, struct entry *entry, char *str){
 
 	struct skynet_context *ctx = skynet_handle_grab(entry->handle);
 
-	printf("to %p:%d:%d. r : %d, cmd : %d, exit_status : %d, term_signal : %d, str : %s\n", 
-			ctx, entry->handle, entry->session, 
-			result, msg->cmd, msg->exit_status, msg->term_signal, str ? str : "");
+	//printf("to %p:%d:%d. r : %d, cmd : %d, exit_status : %d, term_signal : %d, str : %s\n", 
+	//		ctx, entry->handle, entry->session, 
+	//		result, msg->cmd, msg->exit_status, msg->term_signal, str ? str : "");
 
 	skynet_context_send(ctx, msg, sizeof(struct res_msg), 0, PTYPE_RESPONSE, entry->session);
-	printf("send done\n");
+	//printf("send done\n");
 }
 static void __on_fs(uv_fs_t *req){
-	printf("__on_fs\n");
+	//printf("__on_fs\n");
 	struct entry *entry = req->data;
-	printf("__notify_call fs cmd : %d\n", entry->cmd);
+	//printf("__notify_call fs cmd : %d\n", entry->cmd);
 	__notify_ccall(req->result, entry, NULL);
 
 	__free_entry(entry);
 }
 static void __on_scandir(uv_fs_t *req){
-	printf("__on_scandir result %d\n", (int)req->result);
+	//printf("__on_scandir result %d\n", (int)req->result);
 	struct entry *entry = req->data;
 
 	uv_dirent_t dent;
@@ -261,9 +261,7 @@ static void __on_scandir(uv_fs_t *req){
 	}
 
 	while (UV_EOF != uv_fs_scandir_next(req, &dent)){
-		printf("scan : %s, is dir : %s\n", dent.name,
-				dent.type == UV_DIRENT_DIR ? "yes" : "no"
-				);
+		//printf("scan : %s, is dir : %s\n", dent.name, dent.type == UV_DIRENT_DIR ? "yes" : "no");
 		__notify_ccall(dent.type == UV_DIRENT_DIR ? 1 : 2 ,
 			   	entry, (char *)dent.name);
 	}
@@ -356,30 +354,30 @@ static void __unlink(struct entry *entry){
 	uv_fs_unlink(uv_loop, &entry->req, path, __on_fs);
 }
 static void __on_spawn_exit(uv_process_t *req, int64_t exit_status, int term_signal){
-	printf("__on_spawn_exit\n");
+	////printf("__on_spawn_exit\n");
 	struct entry *entry = req->data;
 	entry->exit_status = exit_status;
 	entry->term_signal = term_signal;
 
-	printf("__on_spawn_exit result : 0, exit status : %d, term signal : %d\n", (int)exit_status, term_signal);
+	//printf("__on_spawn_exit result : 0, exit status : %d, term signal : %d\n", (int)exit_status, term_signal);
 	__notify_ccall(0, entry, NULL);
 
 	//printf("process exited with status %d %d\n", exit_status, term_signal);
-	printf("uv_close spawn req\n");
+	//printf("uv_close spawn req\n");
 	uv_close((uv_handle_t *)req, NULL);
-	printf("uv_close spawn req done\n");
+	//printf("uv_close spawn req done\n");
 
 	__free_entry(entry);
 }
 static void __on_uv_read_stream(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf){
-	printf("__on_uv_read_stream. nread : %ld\n", (long)nread);
+	//printf("__on_uv_read_stream. nread : %ld\n", (long)nread);
 	uv_pipe_t *pipe = (uv_pipe_t *)stream;
 	// err or done
 	if (nread <= 0) {
-		printf("__on_uv_read_stream. free then close pipe\n");
+		//printf("__on_uv_read_stream. free then close pipe\n");
 		free(buf->base);
 		uv_close((uv_handle_t *)pipe, NULL);
-		printf("__on_uv_read_stream. free then close pipe done\n");
+		//printf("__on_uv_read_stream. free then close pipe done\n");
 		return;
 	}
 
@@ -387,13 +385,13 @@ static void __on_uv_read_stream(uv_stream_t *stream, ssize_t nread, const uv_buf
 	//buf len = suggest_len + 1
 	//nread < entry.buf.len
 	buf->base[nread] = '\0';
-	printf("what pipe read : \n%s\n", buf->base);
+	//printf("what pipe read : \n%s$--\n", buf->base);
 
 	// 1 mean : reading output
 	__notify_ccall(1, entry, (char *)buf->base);
 }
 static void __alloc_buf(uv_handle_t *handle, size_t len, uv_buf_t *buf){
-	printf("alloc buffer called. requesting %ld byte \n", len);
+	//printf("alloc buffer called. requesting %ld byte \n", len);
 	buf->base = malloc(len + 1);
 	buf->len = len;
 }
@@ -468,7 +466,7 @@ static void __do_cmd(struct entry *entry){
 }
 
 static void __async_cb(uv_async_t *handle){
-	printf("__async cb\n");
+	//printf("__async cb\n");
 
 	struct entry *entry = __detach_entry_chain();
 	while (entry) {
@@ -479,16 +477,16 @@ static void __async_cb(uv_async_t *handle){
 }
 
 static void * __uv_thread(void *ud){
-	printf("______start uv\n");
+	//printf("______start uv\n");
 
-	printf("__get uv loop\n");
+	//printf("__get uv loop\n");
 	uv_loop = uv_default_loop();
-	printf("__uv mutex init\n");
+	//printf("__uv mutex init\n");
 	uv_mutex_init(&entry_mutex);
-	printf("__uv async init\n");
+	//printf("__uv async init\n");
 	uv_async_init(uv_loop, &entry_async, __async_cb);
 
-	printf("__uv_run\n");
+	//printf("__uv_run\n");
 	uv_run(uv_loop, UV_RUN_DEFAULT);
 }
 
@@ -496,9 +494,9 @@ static void __init(){
 	static bool inited = false;
 	if (inited) return;
 
-	printf("snuv init\n");
+	//printf("snuv init\n");
 	inited = true;
-	printf("get uv loop %p\n", uv_loop);
+	//printf("get uv loop %p\n", uv_loop);
 
 	pthread_create(&uv_tid, NULL, __uv_thread, NULL);
 
