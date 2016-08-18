@@ -24,11 +24,19 @@
 #define SNUV_CREAD 2
 #define SNUV_CWRITE 3
 #define SNUV_CCLOSE 4
+#define SNUV_CMKDIR 5
+#define SNUV_CRMDIR 6
+#define SNUV_CSCANDIR 7
+#define SNUV_CSTAT 8
+#define SNUV_CRENAME 9
+#define SNUV_CUNLINK 10
 
-#define SNUV_CSPAWN 5
+#define SNUV_CSPAWN 100
 
 
 #define BUF_SIZE 65535
+
+static int _default_mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH;
 
 struct entry {
 	//----------for skynet
@@ -66,6 +74,9 @@ struct res_msg{
 	int exit_status;
 	int term_signal;
 	char str[0];
+
+	bool has_stat;
+	uv_stat_t stat;
 };
 
 static pthread_t uv_tid;
@@ -117,37 +128,37 @@ static void __free_entry(struct entry *entry){
 }
 
 static void __add_entry(int32_t handle, int session, int cmd, char **argv){
-	printf("new entry\n");
+	//printf("new entry\n");
 
 	struct entry *entry = calloc(1, sizeof(struct entry));
-	printf("set cmd\n");
+	//printf("set cmd\n");
 	entry->cmd = cmd;
-	printf("set argv\n");
+	//printf("set argv\n");
 	entry->argv = __dup_argv(argv);
-	printf("set handle\n");
+	//printf("set handle\n");
 	entry->handle = handle;
-	printf("set session\n");
+	//printf("set session\n");
 	entry->session = session;
 
-	printf("set req.data = entry\n");
+	//printf("set req.data = entry\n");
 	// -> self
 	entry->req.data = entry;
-	printf("set process_req.data = entry\n");
+	//printf("set process_req.data = entry\n");
 	entry->process_req.data = entry;
-	printf("set pipe.data = entry\n");
+	//printf("set pipe.data = entry\n");
 	entry->pipe.data = entry;
 
-	printf("try lock\n");
+	//printf("try lock\n");
 	while (uv_mutex_trylock(&entry_mutex))
 		;
 
-	printf("get lock succ\n");
+	//printf("get lock succ\n");
 	entry->next = entry_head;
 	entry_head = entry;
 
-	printf("unlock\n");
+	//printf("unlock\n");
 	uv_mutex_unlock(&entry_mutex);
-	printf("async send\n");
+	//printf("async send\n");
 	uv_async_send(&entry_async);
 }
 static void __init_entry_buf(struct entry *entry, int size){
@@ -192,13 +203,22 @@ static int __parse_flags(const char *flags){
 		if (a) 
 			flag = O_RDWR | O_CREAT | O_APPEND;
 	}
-	printf("flag %d, r : %d, w : %d, a : %d, add : %d %d %d %d\n", flag, r, w, a, add, O_RDWR, O_RDWR | O_CREAT | O_TRUNC, O_RDWR | O_CREAT | O_TRUNC);
+	//printf("flag %d, r : %d, w : %d, a : %d, add : %d %d %d %d\n", flag, r, w, a, add, O_RDWR, O_RDWR | O_CREAT | O_TRUNC, O_RDWR | O_CREAT | O_TRUNC);
 	return flag;
+}
+static void __fill_msg_stat(struct res_msg *msg, int result, struct entry *entry){
+	if (entry->cmd == SNUV_CSTAT 
+			&& result >= 0){
+		msg->has_stat = true;
+		msg->stat = entry->req.statbuf;
+	}
 }
 
 // notify msg will be freed by skynet
-static void __notify_ccall(int result, struct entry *entry, uv_buf_t *buf){
-	char *str = buf ? buf->base : entry->is_buf_inited ? entry->buf.base : NULL;
+static void __notify_ccall(int result, struct entry *entry, char *str){
+	if (!str && entry->is_buf_inited) {
+		str = entry->buf.base;
+	}
 	int str_len = str ? strlen(str) : 0;
 
 	struct res_msg *msg = calloc(1, sizeof(struct res_msg) + str_len + 1);
@@ -211,10 +231,14 @@ static void __notify_ccall(int result, struct entry *entry, uv_buf_t *buf){
 	if (str) {
 		strcpy(msg->str, str);
 	}
+	__fill_msg_stat(msg, result, entry);
 
 	struct skynet_context *ctx = skynet_handle_grab(entry->handle);
 
-	printf("_thread send to ctx %p handle : %d, session %d\n", ctx, entry->handle, entry->session);
+	printf("to %p:%d:%d. r : %d, cmd : %d, exit_status : %d, term_signal : %d, str : %s\n", 
+			ctx, entry->handle, entry->session, 
+			result, msg->cmd, msg->exit_status, msg->term_signal, str ? str : "");
+
 	skynet_context_send(ctx, msg, sizeof(struct res_msg), 0, PTYPE_RESPONSE, entry->session);
 	printf("send done\n");
 }
@@ -224,6 +248,28 @@ static void __on_fs(uv_fs_t *req){
 	printf("__notify_call fs cmd : %d\n", entry->cmd);
 	__notify_ccall(req->result, entry, NULL);
 
+	__free_entry(entry);
+}
+static void __on_scandir(uv_fs_t *req){
+	printf("__on_scandir result %d\n", (int)req->result);
+	struct entry *entry = req->data;
+
+	uv_dirent_t dent;
+	if (req->result < 0) {
+		__notify_ccall(req->result, entry, NULL);
+		goto __FREE__;
+	}
+
+	while (UV_EOF != uv_fs_scandir_next(req, &dent)){
+		printf("scan : %s, is dir : %s\n", dent.name,
+				dent.type == UV_DIRENT_DIR ? "yes" : "no"
+				);
+		__notify_ccall(dent.type == UV_DIRENT_DIR ? 1 : 2 ,
+			   	entry, (char *)dent.name);
+	}
+	__notify_ccall(0, entry, NULL);
+
+__FREE__ : 
 	__free_entry(entry);
 }
 /*
@@ -254,7 +300,7 @@ static void __open(struct entry *entry){
 	const char *flags = entry->argv[1];
 	int flag = __parse_flags(flags);
 
-	uv_fs_open(uv_loop, &entry->req, path, flag, 0, __on_fs);
+	uv_fs_open(uv_loop, &entry->req, path, flag, _default_mode, __on_fs);
 }
 static void __read(struct entry *entry){
 	const char *fd_str = entry->argv[0];
@@ -283,22 +329,57 @@ static void __close(struct entry *entry){
 
 	uv_fs_close(uv_loop, &entry->req, fd, __on_fs);
 }
+static void __mkdir(struct entry *entry){
+	const char *path = entry->argv[0];
+	uv_fs_mkdir(uv_loop, &entry->req, path, _default_mode, __on_fs);
+}
+static void __rmdir(struct entry *entry){
+	const char *path = entry->argv[0];
+	uv_fs_rmdir(uv_loop, &entry->req, path, __on_fs);
+}
+static void __scandir(struct entry *entry){
+	const char *path = entry->argv[0];
+	uv_fs_scandir(uv_loop, &entry->req, path, 0, __on_scandir);
+}
+static void __stat(struct entry *entry){
+	const char *path = entry->argv[0];
+	uv_fs_stat(uv_loop, &entry->req, path, __on_fs);
+}
+static void __rename(struct entry *entry){
+	const char *path = entry->argv[0];
+	const char *new_path = entry->argv[1];
+
+	uv_fs_rename(uv_loop, &entry->req, path, new_path, __on_fs);
+}
+static void __unlink(struct entry *entry){
+	const char *path = entry->argv[0];
+	uv_fs_unlink(uv_loop, &entry->req, path, __on_fs);
+}
 static void __on_spawn_exit(uv_process_t *req, int64_t exit_status, int term_signal){
+	printf("__on_spawn_exit\n");
 	struct entry *entry = req->data;
 	entry->exit_status = exit_status;
 	entry->term_signal = term_signal;
 
+	printf("__on_spawn_exit result : 0, exit status : %d, term signal : %d\n", (int)exit_status, term_signal);
 	__notify_ccall(0, entry, NULL);
 
 	//printf("process exited with status %d %d\n", exit_status, term_signal);
+	printf("uv_close spawn req\n");
 	uv_close((uv_handle_t *)req, NULL);
+	printf("uv_close spawn req done\n");
+
+	__free_entry(entry);
 }
 static void __on_uv_read_stream(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf){
+	printf("__on_uv_read_stream. nread : %ld\n", (long)nread);
 	uv_pipe_t *pipe = (uv_pipe_t *)stream;
 	// err or done
 	if (nread <= 0) {
+		printf("__on_uv_read_stream. free then close pipe\n");
 		free(buf->base);
 		uv_close((uv_handle_t *)pipe, NULL);
+		printf("__on_uv_read_stream. free then close pipe done\n");
 		return;
 	}
 
@@ -306,12 +387,13 @@ static void __on_uv_read_stream(uv_stream_t *stream, ssize_t nread, const uv_buf
 	//buf len = suggest_len + 1
 	//nread < entry.buf.len
 	buf->base[nread] = '\0';
+	printf("what pipe read : \n%s\n", buf->base);
 
 	// 1 mean : reading output
-	__notify_ccall(1, entry, (uv_buf_t *)buf);
+	__notify_ccall(1, entry, (char *)buf->base);
 }
 static void __alloc_buf(uv_handle_t *handle, size_t len, uv_buf_t *buf){
-	printf("alloc buffer called. requesting %d byte \n", len);
+	printf("alloc buffer called. requesting %ld byte \n", len);
 	buf->base = malloc(len + 1);
 	buf->len = len;
 }
@@ -363,6 +445,24 @@ static void __do_cmd(struct entry *entry){
 			break;
 		case SNUV_CSPAWN : 
 			__spawn(entry);
+			break;
+		case SNUV_CMKDIR : 
+			__mkdir(entry);
+			break;
+		case SNUV_CRMDIR : 
+			__rmdir(entry);
+			break;
+		case SNUV_CSCANDIR : 
+			__scandir(entry);
+			break;
+		case SNUV_CSTAT : 
+			__stat(entry);
+			break;
+		case SNUV_CRENAME : 
+			__rename(entry);
+			break;
+		case SNUV_CUNLINK : 
+			__unlink(entry);
 			break;
 	}
 }
@@ -540,6 +640,133 @@ static int lget_str(lua_State *ls){
 	lua_pushstring(ls, res_msg->str);
 	return 1;
 }
+static long __cv_timespec_ms(uv_timespec_t t){
+	long ns = t.tv_nsec;
+	long ms = t.tv_sec * 1000;
+	long n_ms = ns / 1000 / 1000;
+	return ms + n_ms;
+}
+static int __push_st_time(lua_State *ls, struct res_msg *res_msg, uv_timespec_t t){
+	if (res_msg->has_stat) {
+		lua_pushinteger(ls, __cv_timespec_ms(t));
+	} else {
+		lua_pushnil(ls);
+	}
+	return 1;
+}
+static int lget_mtime_ms(lua_State *ls){
+	struct res_msg *res_msg = lua_touserdata(ls, -1);
+	return __push_st_time(ls, res_msg, res_msg->stat.st_mtim);
+}
+static int lget_ctime_ms(lua_State *ls){
+	struct res_msg *res_msg = lua_touserdata(ls, -1);
+	return __push_st_time(ls, res_msg, res_msg->stat.st_ctim);
+}
+static int lget_atime_ms(lua_State *ls){
+	struct res_msg *res_msg = lua_touserdata(ls, -1);
+	return __push_st_time(ls, res_msg, res_msg->stat.st_atim);
+}
+static int lis_stat_dir(lua_State *ls){
+	struct res_msg *res_msg = lua_touserdata(ls, -1);
+	if (res_msg->has_stat) {
+		uint64_t mode = res_msg->stat.st_mode;
+		lua_pushboolean(ls, S_ISDIR(mode));
+		return 1;
+	}
+	return 0;
+}
+
+static int lmkdir(lua_State *ls){
+	int32_t handle = (int32_t)lua_tointeger(ls, -3);
+	int session = lua_tointeger(ls, -2);
+	const char *path = lua_tostring(ls, -1);
+
+	__init();
+
+	char *argv[] = {
+		(char *)path, NULL,
+	};
+
+	// TODO no mode support yet
+	__add_entry(handle, session, SNUV_CMKDIR, argv);
+	return 0;
+}
+static int lrmdir(lua_State *ls){
+	int32_t handle = (int32_t)lua_tointeger(ls, -3);
+	int session = lua_tointeger(ls, -2);
+	const char *path = lua_tostring(ls, -1);
+
+	__init();
+
+	char *argv[] = {
+		(char *)path, NULL,
+	};
+
+	// TODO no mode support yet
+	__add_entry(handle, session, SNUV_CRMDIR, argv);
+	return 0;
+}
+static int lscandir(lua_State *ls){
+	int32_t handle = (int32_t)lua_tointeger(ls, -3);
+	int session = lua_tointeger(ls, -2);
+	const char *path = lua_tostring(ls, -1);
+
+	__init();
+
+	char *argv[] = {
+		(char *)path, NULL,
+	};
+
+	// TODO no mode support yet
+	__add_entry(handle, session, SNUV_CSCANDIR, argv);
+	return 0;
+}
+static int l_stat(lua_State *ls){
+	int32_t handle = (int32_t)lua_tointeger(ls, -3);
+	int session = lua_tointeger(ls, -2);
+	const char *path = lua_tostring(ls, -1);
+
+	__init();
+
+	char *argv[] = {
+		(char *)path, NULL,
+	};
+
+	// TODO no mode support yet
+	__add_entry(handle, session, SNUV_CSTAT, argv);
+	return 0;
+}
+static int lrename(lua_State *ls){
+	int32_t handle = (int32_t)lua_tointeger(ls, -4);
+	int session = lua_tointeger(ls, -3);
+	const char *path = lua_tostring(ls, -2);
+	const char *new_path = lua_tostring(ls, -1);
+
+	__init();
+
+	char *argv[] = {
+		(char *)path, (char *)new_path, NULL,
+	};
+
+	// TODO no mode support yet
+	__add_entry(handle, session, SNUV_CRENAME, argv);
+	return 0;
+}
+static int lunlink(lua_State *ls){
+	int32_t handle = (int32_t)lua_tointeger(ls, -3);
+	int session = lua_tointeger(ls, -2);
+	const char *path = lua_tostring(ls, -1);
+
+	__init();
+
+	char *argv[] = {
+		(char *)path, NULL,
+	};
+
+	// TODO no mode support yet
+	__add_entry(handle, session, SNUV_CUNLINK, argv);
+	return 0;
+}
 
 int luaopen_snuv(lua_State *l) {
 	luaL_Reg lib[] = {
@@ -548,11 +775,25 @@ int luaopen_snuv(lua_State *l) {
 		{ "write_str", lwrite_str },
 		{ "close", lclose },
 		{ "spawn", lspawn },
+
+		{ "mkdir", lmkdir },
+		{ "rmdir", lrmdir },
+		{ "scandir", lscandir },
+		{ "stat", l_stat },
+		{ "rename", lrename },
+		{ "unlink", lunlink },
+
 		{ "get_result", lget_result },
 		{ "get_cmd", lget_cmd },
 		{ "get_exit_status", lget_exit_status },
 		{ "get_term_signal", lget_term_signal },
 		{ "get_str", lget_str },
+
+		{ "get_mtime_ms", lget_mtime_ms },
+		{ "get_ctime_ms", lget_ctime_ms },
+		{ "get_atime_ms", lget_atime_ms },
+		{ "is_stat_dir", lis_stat_dir },
+
 		{ NULL,  NULL },
 	};
 

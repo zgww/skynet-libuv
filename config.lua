@@ -1,4 +1,4 @@
-skynet_root = '/home/zgww/ws/skynet/'
+skynet_root = '/home/zgww/pe/skynet/'
 root = skynet_root
 thread = 8
 logger = nil
