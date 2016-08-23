@@ -777,6 +777,7 @@ int luaopen_snuv(lua_State *l) {
 		{ "open", lopen },
 		{ "read_str", lread_str },
 		{ "write_str", lwrite_str },
+		{ "read", lread_str },
 		{ "write", lwrite_str },
 		{ "close", lclose },
 		{ "spawn", lspawn },
