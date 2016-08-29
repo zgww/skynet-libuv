@@ -775,8 +775,6 @@ static int lunlink(lua_State *ls){
 int luaopen_snuv(lua_State *l) {
 	luaL_Reg lib[] = {
 		{ "open", lopen },
-		{ "read_str", lread_str },
-		{ "write_str", lwrite_str },
 		{ "read", lread_str },
 		{ "write", lwrite_str },
 		{ "close", lclose },
