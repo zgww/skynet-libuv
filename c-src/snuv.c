@@ -546,7 +546,7 @@ static void snuv_write_str(int32_t handle, int session, int fd, char *str, size_
 	char len_str[128];
 	sprintf(len_str, "%ld", (long)len);
 
-	char *argv[3];
+	char *argv[4];
 	argv[0] = fd_str;
 	argv[1] = (char *)str;
 	argv[2] = len_str;
