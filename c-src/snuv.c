@@ -81,6 +81,7 @@ struct res_msg{
 	char str[0];
 };
 
+static pthread_once_t once = PTHREAD_ONCE_INIT;
 static pthread_t uv_tid;
 static struct entry *entry_head = NULL;
 static uv_loop_t *uv_loop;
@@ -498,13 +499,11 @@ static void * __uv_thread(void *ud){
 	uv_run(uv_loop, UV_RUN_DEFAULT);
 }
 
+// 使用pthread_once,保证在多线程环境下只调用一次
 static void __init(){
-	static bool inited = false;
-	if (inited) return;
-
-	//printf("snuv init\n");
-	inited = true;
-	//printf("get uv loop %p\n", uv_loop);
+	//printf("------------------------------\n");
+	//printf("__init\n");
+	//printf("------------------------------\n");
 
 	//printf("__uv mutex init\n");
 	uv_mutex_init(&entry_mutex);
@@ -519,13 +518,13 @@ static void __init(){
 }
 
 static void snuv_open(int32_t handle, int session, char *path, char *flags){
-	__init();
+	pthread_once(&once, &__init);
 
 	char *argv[] = { path, flags, NULL, };
 	__add_entry(handle, session, SNUV_COPEN, argv);
 }
 static void snuv_read_str(int32_t handle, int session, int fd){
-	__init();
+	pthread_once(&once, &__init);
 
 	char fs_str[128];
 	sprintf(fs_str, "%d", fd);
@@ -535,7 +534,7 @@ static void snuv_read_str(int32_t handle, int session, int fd){
 	__add_entry(handle, session, SNUV_CREAD, argv);
 }
 static void snuv_write_str(int32_t handle, int session, int fd, char *str, size_t len){
-	__init();
+	pthread_once(&once, &__init);
 
 	char fd_str[128];
 	sprintf(fd_str, "%d", fd);
@@ -551,7 +550,7 @@ static void snuv_write_str(int32_t handle, int session, int fd, char *str, size_
 	__add_entry(handle, session, SNUV_CWRITE, argv);
 }
 static void snuv_close(int32_t handle, int session, int fd){
-	__init();
+	pthread_once(&once, &__init);
 
 	char fd_str[128];
 	sprintf(fd_str, "%d", fd);
@@ -564,7 +563,7 @@ static void snuv_close(int32_t handle, int session, int fd){
 // argv is not used after snuv_spawn.
 // snuv_spawn use argv copy
 static void snuv_spawn(int32_t handle, int session, char **argv){
-	__init();
+	pthread_once(&once, &__init);
 
 	__add_entry(handle, session, SNUV_CSPAWN, argv);
 }
@@ -701,7 +700,7 @@ static int lmkdir(lua_State *ls){
 	int session = lua_tointeger(ls, -2);
 	const char *path = lua_tostring(ls, -1);
 
-	__init();
+	pthread_once(&once, &__init);
 
 	char *argv[] = {
 		(char *)path, NULL,
@@ -716,7 +715,7 @@ static int lrmdir(lua_State *ls){
 	int session = lua_tointeger(ls, -2);
 	const char *path = lua_tostring(ls, -1);
 
-	__init();
+	pthread_once(&once, &__init);
 
 	char *argv[] = {
 		(char *)path, NULL,
@@ -731,7 +730,7 @@ static int lscandir(lua_State *ls){
 	int session = lua_tointeger(ls, -2);
 	const char *path = lua_tostring(ls, -1);
 
-	__init();
+	pthread_once(&once, &__init);
 
 	char *argv[] = {
 		(char *)path, NULL,
@@ -746,7 +745,7 @@ static int l_stat(lua_State *ls){
 	int session = lua_tointeger(ls, -2);
 	const char *path = lua_tostring(ls, -1);
 
-	__init();
+	pthread_once(&once, &__init);
 
 	char *argv[] = {
 		(char *)path, NULL,
@@ -762,7 +761,7 @@ static int lrename(lua_State *ls){
 	const char *path = lua_tostring(ls, -2);
 	const char *new_path = lua_tostring(ls, -1);
 
-	__init();
+	pthread_once(&once, &__init);
 
 	char *argv[] = {
 		(char *)path, (char *)new_path, NULL,
@@ -777,7 +776,7 @@ static int lunlink(lua_State *ls){
 	int session = lua_tointeger(ls, -2);
 	const char *path = lua_tostring(ls, -1);
 
-	__init();
+	pthread_once(&once, &__init);
 
 	char *argv[] = {
 		(char *)path, NULL,
