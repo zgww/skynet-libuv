@@ -1,13 +1,23 @@
 
-
 skynet = /home/zgww/pe/skynet
+f = -shared -fPIC
+
+ifeq ($(shell uname), Darwin)
+
+f += -undefined dynamic_lookup
+skynet = /Users/zgww/ws/skynet
+
+endif
+
 
 I = -I$(skynet)/skynet-src \
 	-I$(skynet)/3rd/lua \
 	-Ic-src
 
-libuv = $(shell pkg-config --cflags --libs libuv)
+libuv = -I/usr/local/include -L/usr/local/lib -luv
+
 
 all : 
-	gcc -shared -o snuv.so c-src/snuv.c -fPIC $(I) -lpthread $(libuv)
-	skynet config.lua
+	gcc -o snuv.so c-src/snuv.c $(I) -lpthread $(libuv) $(f)
+	cp snuv.so ../lua_spider/lib/mac/
+	#skynet config.lua

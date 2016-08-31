@@ -243,11 +243,12 @@ static void __notify_ccall(int result, struct entry *entry, char *str){
 	//printf("send done\n");
 }
 static void __on_fs(uv_fs_t *req){
-	//printf("__on_fs\n");
+	printf("__on_fs\n");
 	struct entry *entry = req->data;
-	//printf("__notify_call fs cmd : %d\n", entry->cmd);
+	printf("__notify_call fs cmd : %d\n", entry->cmd);
 	__notify_ccall(req->result, entry, NULL);
 
+	printf("__On_fs. free_entry");
 	__free_entry(entry);
 }
 static void __on_scandir(uv_fs_t *req){
@@ -321,12 +322,15 @@ static void __write(struct entry *entry){
 	strncpy(entry->buf.base, str, len);
 	entry->buf.len = len;
 
+	//printf("write. uv_fs_write %d %c%c \n", len, str[0], str[1]);
+
 	uv_fs_write(uv_loop, &entry->req, fd, &entry->buf, 1, -1, __on_fs);
 }
 static void __close(struct entry *entry){
 	const char *fd_str = entry->argv[0];
 	int fd = atoi(fd_str);
 
+	printf("__close\n");
 	uv_fs_close(uv_loop, &entry->req, fd, __on_fs);
 }
 static void __mkdir(struct entry *entry){
@@ -490,6 +494,7 @@ static void * __uv_thread(void *ud){
 
 	//printf("__uv_run\n");
 	uv_run(uv_loop, UV_RUN_DEFAULT);
+	return NULL;
 }
 
 static void __init(){
@@ -537,6 +542,7 @@ static void snuv_write_str(int32_t handle, int session, int fd, char *str, size_
 	argv[2] = len_str;
 	argv[3] = NULL;
 
+	printf("snuv`write`str. add entry\n");
 	__add_entry(handle, session, SNUV_CWRITE, argv);
 }
 static void snuv_close(int32_t handle, int session, int fd){
@@ -581,6 +587,8 @@ static int lwrite_str(lua_State *ls){
 	int fd = lua_tointeger(ls, -2);
 	size_t len;
 	const char *str = lua_tolstring(ls, -1, &len);
+
+	printf("lwrite_str. len : %d fd %d\n", (int)len, fd);
 
 	snuv_write_str(handle, session, fd, (char *)str, len);
 	return 0;
@@ -775,8 +783,6 @@ static int lunlink(lua_State *ls){
 int luaopen_snuv(lua_State *l) {
 	luaL_Reg lib[] = {
 		{ "open", lopen },
-		{ "read_str", lread_str },
-		{ "write_str", lwrite_str },
 		{ "read", lread_str },
 		{ "write", lwrite_str },
 		{ "close", lclose },
