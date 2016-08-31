@@ -10,4 +10,7 @@ libuv = $(shell pkg-config --cflags --libs libuv)
 
 all : 
 	gcc -shared -o snuv.so c-src/snuv.c -fPIC $(I) -lpthread $(libuv)
+	cp snuv.so ../lua_spider/lib/
+
+run : 
 	skynet config.lua
