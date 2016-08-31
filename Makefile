@@ -20,4 +20,6 @@ libuv = -I/usr/local/include -L/usr/local/lib -luv
 all : 
 	gcc -o snuv.so c-src/snuv.c $(I) -lpthread $(libuv) $(f)
 	cp snuv.so ../lua_spider/lib/mac/
-	#skynet config.lua
+
+run : 
+	skynet config.lua
