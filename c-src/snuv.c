@@ -37,6 +37,7 @@
 #define BUF_SIZE 65535
 
 static int _default_mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH;
+static int _mkdir_defa_mode = S_IRWXU | S_IRWXG | S_IRWXO;
 
 struct entry {
 	//----------for skynet
@@ -341,7 +342,7 @@ static void __close(struct entry *entry){
 }
 static void __mkdir(struct entry *entry){
 	const char *path = entry->argv[0];
-	uv_fs_mkdir(uv_loop, &entry->req, path, _default_mode, __on_fs);
+	uv_fs_mkdir(uv_loop, &entry->req, path, _mkdir_defa_mode, __on_fs);
 }
 static void __rmdir(struct entry *entry){
 	const char *path = entry->argv[0];
