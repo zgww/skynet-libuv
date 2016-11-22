@@ -39,6 +39,17 @@
 static int _default_mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH;
 static int _mkdir_defa_mode = S_IRWXU | S_IRWXG | S_IRWXO;
 
+struct arg {
+	char *path;
+	char *flags;
+	char *new_path;
+
+	int fd;
+	char *str;
+	int len;
+
+	char **argv;
+};
 struct entry {
 	//----------for skynet
 	int32_t handle;
@@ -58,10 +69,9 @@ struct entry {
 	int exit_status;
 	int term_signal;
 
-
 	int cmd;
-	char **argv;
 	struct entry *next;
+	struct arg *arg;
 };
 // send by skynet_context_send(ctx, msg, sz)
 // freed after dispatch_message in skynet : free(msg)
@@ -90,33 +100,33 @@ static uv_mutex_t entry_mutex;
 static uv_async_t entry_async;
 
 
-static int __get_argc(char **argv){
-	int i = 0;
-	while (true) {
-		char *arg = argv[i];
-		i++;
-		if (!arg) {
-			break;
-		}
-	}
-	return i;
-}
-static char ** __dup_argv(char **argv){
-	int argc = __get_argc(argv);
-	char **out_argv = malloc(sizeof(void *) * argc);
+static void __free_arg(struct arg *arg){
+	if (!arg) return;
 	int i;
-	for (i = 0; i < argc; i++) {
-		out_argv[i] = argv[i] ? strdup(argv[i]) : NULL;
+
+	//printf("free path\n");
+	if (arg->path) free(arg->path);
+	//printf("free new_path\n");
+	if (arg->new_path) free(arg->new_path);
+	//printf("free flags\n");
+	if (arg->flags) free(arg->flags);
+	//printf("free str\n");
+	if (arg->str) free(arg->str);
+
+	//printf("free argv data\n");
+	if (arg->argv) {
+		for (i = 0; arg->argv[i]; i++)
+			free(arg->argv[i]);
+	//printf("free argv\n");
+		free(arg->argv);
 	}
 
-	return out_argv;
+	//printf("free arg\n");
+
+	free(arg);
 }
 static void __free_entry(struct entry *entry){
-	int i;
-	for (i = 0; entry->argv[i]; i++) {
-		free(entry->argv[i]);
-	}
-	free(entry->argv);
+	__free_arg(entry->arg);
 
 	if (entry->is_buf_inited)
 		free(entry->buf.base);
@@ -131,18 +141,18 @@ static void __free_entry(struct entry *entry){
 	free(entry);
 }
 
-static void __add_entry(int32_t handle, int session, int cmd, char **argv){
+static void __add_entry(int32_t handle, int session, int cmd, struct arg *arg){
 	//printf("new entry\n");
 
 	struct entry *entry = calloc(1, sizeof(struct entry));
 	//printf("set cmd\n");
 	entry->cmd = cmd;
 	//printf("set argv\n");
-	entry->argv = __dup_argv(argv);
 	//printf("set handle\n");
 	entry->handle = handle;
 	//printf("set session\n");
 	entry->session = session;
+	entry->arg = arg;
 
 	//printf("set req.data = entry\n");
 	// -> self
@@ -175,8 +185,7 @@ static void __init_entry_buf(struct entry *entry, int size){
 	size = size <= 0 ? BUF_SIZE : size;
 	//printf("__init_entry_buf, actual  size %d\n", size);
 	// BUF_SIZE + 1. 1 is '\0'.
-	entry->buf = uv_buf_init((char *)malloc(size + 1), size);
-	entry->buf.base[size] = '\0';
+	entry->buf = uv_buf_init((char *)malloc(size), size);
 	//printf("init buf len : %d\n", entry->buf.len);
 
 	entry->is_buf_inited = true;
@@ -236,7 +245,7 @@ static void __notify_ccall(int result, struct entry *entry, char *str, int str_l
 	msg->term_signal = entry->term_signal;
 
 	if (str) {
-		strcpy(msg->str, str);
+		memcpy(msg->str, str, str_len);
 		msg->str_len = str_len;
 	}
 	__fill_msg_stat(msg, result, entry);
@@ -259,6 +268,7 @@ static void __on_fs(uv_fs_t *req){
 	__free_entry(entry);
 }
 static void __on_scandir(uv_fs_t *req){
+	//printf("hi on scan\n");
 	//printf("__on_scandir result %d\n", (int)req->result);
 	struct entry *entry = req->data;
 
@@ -269,7 +279,7 @@ static void __on_scandir(uv_fs_t *req){
 	}
 
 	while (UV_EOF != uv_fs_scandir_next(req, &dent)){
-		//printf("scan : %s, is dir : %s\n", dent.name, dent.type == UV_DIRENT_DIR ? "yes" : "no");
+	//	printf("scan : %s, is dir : %s\n", dent.name, dent.type == UV_DIRENT_DIR ? "yes" : "no");
 		__notify_ccall(dent.type == UV_DIRENT_DIR ? 1 : 2 , entry, (char *)dent.name, strlen((char *)dent.name));
 	}
 	__notify_ccall(0, entry, NULL, 0);
@@ -286,8 +296,8 @@ static void __on_read(uv_fs_t *req){
 		__notify_ccall(req->result, entry, NULL, 0);
 		goto __FREE__;
 	}
-	entry->buf.base[req->result] = '\0';
 
+	//printf("read cnt : %ld\n", req->result);
 	//printf("%s\n", entry->buf.base);
 	__notify_ccall(req->result, entry, entry->buf.base, req->result);
 
@@ -304,15 +314,14 @@ __FREE__ :
 	//}
 }
 static void __open(struct entry *entry){
-	const char *path = entry->argv[0];
-	const char *flags = entry->argv[1];
+	const char *path = entry->arg->path;
+	const char *flags = entry->arg->flags;
 	int flag = __parse_flags(flags);
 
 	uv_fs_open(uv_loop, &entry->req, path, flag, _default_mode, __on_fs);
 }
 static void __read(struct entry *entry){
-	const char *fd_str = entry->argv[0];
-	int fd = atoi(fd_str);
+	int fd = entry->arg->fd;
 
 	//printf("__read__init entry buf\n");
 	__init_entry_buf(entry, 0);
@@ -321,49 +330,52 @@ static void __read(struct entry *entry){
 	uv_fs_read(uv_loop, &entry->req, fd, &entry->buf, 1, -1, __on_read);
 }
 static void __write(struct entry *entry){
-	const char *fd_str = entry->argv[0];
-	int fd = atoi(fd_str);
-	const char *str = entry->argv[1];
+	//printf("__write\n");
+	int fd = entry->arg->fd;
+	const char *str = entry->arg->str;
+	int len = entry->arg->len;
 
-	const char *len_str = entry->argv[2];
-	size_t len = (size_t)atoi(len_str);
-
+	//printf("init entry buf\n");
 	__init_entry_buf(entry, len);
-	strncpy(entry->buf.base, str, len);
+	//printf("strncpy\n");
+	memcpy(entry->buf.base, str, len);
 	entry->buf.len = len;
+
+	//printf("----------------------------------------write :%d\n", len);
 
 	uv_fs_write(uv_loop, &entry->req, fd, &entry->buf, 1, -1, __on_fs);
 }
 static void __close(struct entry *entry){
-	const char *fd_str = entry->argv[0];
-	int fd = atoi(fd_str);
+	int fd = entry->arg->fd;
 
 	uv_fs_close(uv_loop, &entry->req, fd, __on_fs);
 }
 static void __mkdir(struct entry *entry){
-	const char *path = entry->argv[0];
+	const char *path = entry->arg->path;
 	uv_fs_mkdir(uv_loop, &entry->req, path, _mkdir_defa_mode, __on_fs);
 }
 static void __rmdir(struct entry *entry){
-	const char *path = entry->argv[0];
+	const char *path = entry->arg->path;
 	uv_fs_rmdir(uv_loop, &entry->req, path, __on_fs);
 }
 static void __scandir(struct entry *entry){
-	const char *path = entry->argv[0];
+	//printf("__scandir\n");
+	const char *path = entry->arg->path;
+	//printf("__scandir : %s\n", path);
 	uv_fs_scandir(uv_loop, &entry->req, path, 0, __on_scandir);
 }
 static void __stat(struct entry *entry){
-	const char *path = entry->argv[0];
+	const char *path = entry->arg->path;
 	uv_fs_stat(uv_loop, &entry->req, path, __on_fs);
 }
 static void __rename(struct entry *entry){
-	const char *path = entry->argv[0];
-	const char *new_path = entry->argv[1];
+	const char *path = entry->arg->path;
+	const char *new_path = entry->arg->new_path;
 
 	uv_fs_rename(uv_loop, &entry->req, path, new_path, __on_fs);
 }
 static void __unlink(struct entry *entry){
-	const char *path = entry->argv[0];
+	const char *path = entry->arg->path;
 	uv_fs_unlink(uv_loop, &entry->req, path, __on_fs);
 }
 static void __on_spawn_exit(uv_process_t *req, int64_t exit_status, int term_signal){
@@ -411,7 +423,7 @@ static void __alloc_buf(uv_handle_t *handle, size_t len, uv_buf_t *buf){
 
 //TODO how read output of child process
 static void __spawn(struct entry *entry){
-	char **argv = entry->argv;
+	char **argv = entry->arg->argv;
 
 	uv_pipe_init(uv_loop, &entry->pipe, 0);
 
@@ -498,6 +510,7 @@ static void * __uv_thread(void *ud){
 	uv_loop = uv_default_loop();
 	//printf("__uv_run\n");
 	uv_run(uv_loop, UV_RUN_DEFAULT);
+	return NULL;
 }
 
 // 使用pthread_once,保证在多线程环境下只调用一次
@@ -519,45 +532,43 @@ static void __init(){
 }
 
 static void snuv_open(int32_t handle, int session, char *path, char *flags){
+	//printf("open %s\n", path);
+
 	pthread_once(&once, &__init);
 
-	char *argv[] = { path, flags, NULL, };
-	__add_entry(handle, session, SNUV_COPEN, argv);
+	struct arg *arg = calloc(1, sizeof(*arg));
+	arg->path = strdup(path);
+	arg->flags = strdup(flags);
+
+	//printf("open %s\n", path);
+	__add_entry(handle, session, SNUV_COPEN, arg);
 }
 static void snuv_read_str(int32_t handle, int session, int fd){
 	pthread_once(&once, &__init);
 
-	char fs_str[128];
-	sprintf(fs_str, "%d", fd);
+	struct arg *arg = calloc(1, sizeof(*arg));
+	arg->fd = fd;
 
-	char *argv[] = { fs_str, NULL, };
-
-	__add_entry(handle, session, SNUV_CREAD, argv);
+	__add_entry(handle, session, SNUV_CREAD, arg);
 }
 static void snuv_write_str(int32_t handle, int session, int fd, char *str, size_t len){
 	pthread_once(&once, &__init);
 
-	char fd_str[128];
-	sprintf(fd_str, "%d", fd);
-	char len_str[128];
-	sprintf(len_str, "%ld", (long)len);
+	struct arg *arg = calloc(1, sizeof(*arg));
+	arg->fd = fd;
+	arg->str = malloc(len);
+	arg->len = len;
+	memcpy(arg->str, str, len);
 
-	char *argv[3];
-	argv[0] = fd_str;
-	argv[1] = (char *)str;
-	argv[2] = len_str;
-	argv[3] = NULL;
-
-	__add_entry(handle, session, SNUV_CWRITE, argv);
+	__add_entry(handle, session, SNUV_CWRITE, arg);
 }
 static void snuv_close(int32_t handle, int session, int fd){
 	pthread_once(&once, &__init);
 
-	char fd_str[128];
-	sprintf(fd_str, "%d", fd);
+	struct arg *arg = calloc(1, sizeof(*arg));
+	arg->fd = fd;
 
-	char *argv[] = { fd_str, NULL, };
-	__add_entry(handle, session, SNUV_CCLOSE, argv);
+	__add_entry(handle, session, SNUV_CCLOSE, arg);
 }
 
 // argv = {executable_file_path, ..., NULL}
@@ -566,7 +577,10 @@ static void snuv_close(int32_t handle, int session, int fd){
 static void snuv_spawn(int32_t handle, int session, char **argv){
 	pthread_once(&once, &__init);
 
-	__add_entry(handle, session, SNUV_CSPAWN, argv);
+	struct arg *arg = calloc(1, sizeof(*arg));
+	arg->argv = argv;
+
+	__add_entry(handle, session, SNUV_CSPAWN, arg);
 }
 
 static int lopen(lua_State *ls){
@@ -620,7 +634,7 @@ static int lspawn(lua_State *ls){
 		// now stack : // val, tbl
 		lua_gettable(ls, -2); 
 		const char *arg = lua_tostring(ls, -1);
-		argv[i - 1] = (char *)arg;
+		argv[i - 1] = strdup(arg);
 
 		lua_pop(ls, 1); // stack : tbl
 	}
@@ -697,66 +711,70 @@ static int lis_stat_dir(lua_State *ls){
 }
 
 static int lmkdir(lua_State *ls){
+	//printf("mkdir\n");
 	int32_t handle = (int32_t)lua_tointeger(ls, -3);
 	int session = lua_tointeger(ls, -2);
 	const char *path = lua_tostring(ls, -1);
 
 	pthread_once(&once, &__init);
 
-	char *argv[] = {
-		(char *)path, NULL,
-	};
+	struct arg *arg = calloc(1, sizeof(*arg));
+	arg->path = strdup(path);
 
 	// TODO no mode support yet
-	__add_entry(handle, session, SNUV_CMKDIR, argv);
+	__add_entry(handle, session, SNUV_CMKDIR, arg);
 	return 0;
 }
 static int lrmdir(lua_State *ls){
+	//printf("rmdir\n");
 	int32_t handle = (int32_t)lua_tointeger(ls, -3);
 	int session = lua_tointeger(ls, -2);
 	const char *path = lua_tostring(ls, -1);
 
 	pthread_once(&once, &__init);
 
-	char *argv[] = {
-		(char *)path, NULL,
-	};
+	struct arg *arg = calloc(1, sizeof(*arg));
+	arg->path = strdup(path);
 
 	// TODO no mode support yet
-	__add_entry(handle, session, SNUV_CRMDIR, argv);
+	__add_entry(handle, session, SNUV_CRMDIR, arg);
 	return 0;
 }
 static int lscandir(lua_State *ls){
+	//printf("scandir\n");
 	int32_t handle = (int32_t)lua_tointeger(ls, -3);
 	int session = lua_tointeger(ls, -2);
 	const char *path = lua_tostring(ls, -1);
 
 	pthread_once(&once, &__init);
 
-	char *argv[] = {
-		(char *)path, NULL,
-	};
+	//printf("scandir1\n");
+	struct arg *arg = calloc(1, sizeof(*arg));
+	arg->path = strdup(path);
 
+	//printf("scandir2\n");
 	// TODO no mode support yet
-	__add_entry(handle, session, SNUV_CSCANDIR, argv);
+	__add_entry(handle, session, SNUV_CSCANDIR, arg);
+	//printf("scandir end\n");
 	return 0;
 }
 static int l_stat(lua_State *ls){
+	//printf("stat\n");
 	int32_t handle = (int32_t)lua_tointeger(ls, -3);
 	int session = lua_tointeger(ls, -2);
 	const char *path = lua_tostring(ls, -1);
 
 	pthread_once(&once, &__init);
 
-	char *argv[] = {
-		(char *)path, NULL,
-	};
+	struct arg *arg = calloc(1, sizeof(*arg));
+	arg->path = strdup(path);
 
 	// TODO no mode support yet
-	__add_entry(handle, session, SNUV_CSTAT, argv);
+	__add_entry(handle, session, SNUV_CSTAT, arg);
 	return 0;
 }
 static int lrename(lua_State *ls){
+	//printf("rename\n");
 	int32_t handle = (int32_t)lua_tointeger(ls, -4);
 	int session = lua_tointeger(ls, -3);
 	const char *path = lua_tostring(ls, -2);
@@ -764,27 +782,26 @@ static int lrename(lua_State *ls){
 
 	pthread_once(&once, &__init);
 
-	char *argv[] = {
-		(char *)path, (char *)new_path, NULL,
-	};
-
+	struct arg *arg = calloc(1, sizeof(*arg));
+	arg->path = strdup(path);
+	arg->new_path = strdup(new_path);
 	// TODO no mode support yet
-	__add_entry(handle, session, SNUV_CRENAME, argv);
+	__add_entry(handle, session, SNUV_CRENAME, arg);
 	return 0;
 }
 static int lunlink(lua_State *ls){
+	//printf("unlink\n");
 	int32_t handle = (int32_t)lua_tointeger(ls, -3);
 	int session = lua_tointeger(ls, -2);
 	const char *path = lua_tostring(ls, -1);
 
 	pthread_once(&once, &__init);
 
-	char *argv[] = {
-		(char *)path, NULL,
-	};
+	struct arg *arg = calloc(1, sizeof(*arg));
+	arg->path = strdup(path);
 
 	// TODO no mode support yet
-	__add_entry(handle, session, SNUV_CUNLINK, argv);
+	__add_entry(handle, session, SNUV_CUNLINK, arg);
 	return 0;
 }
 
