@@ -1,6 +1,14 @@
 
-
 skynet = /home/zgww/pe/skynet
+f = -shared -fPIC
+
+ifeq ($(shell uname), Darwin)
+
+f += -undefined dynamic_lookup
+skynet = /Users/zgww/ws/skynet
+
+endif
+
 
 
 libuv = $(shell pkg-config --cflags --libs libuv)
